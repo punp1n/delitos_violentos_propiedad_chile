@@ -1,11 +1,14 @@
 """
 02_extract_placebos.py — ETL: Extracción de series placebo
-Proyecto v4.0
+Proyecto v4.0 (rev.2)
 
 Extrae denuncias de delitos placebo:
   P1: Cuasidelito vehicular (CUM 14020) — proxy de movilidad
   P2: Homicidios dolosos (CUM 702, 703, 705) — cifra negra ≈ 0
+  P4: Daños simples (CUM 840) — propensión a denunciar estable
+  P5: Lesiones leves (CUM 13001) — control no-propiedad, no-violento grave
   Complemento: No dar cuenta de accidente (CUM 12077)
+  Complemento: Secuestros (CUM 202, 235, 236, 237, 248, 249)
 """
 
 import pandas as pd
@@ -20,6 +23,9 @@ PLACEBOS = {
     "cuasidelito_vehicular": [14020],
     "homicidio_doloso":      [702, 703, 705],
     "no_dar_cuenta_accid":   [12077],
+    "secuestro":             [202, 235, 236, 237, 248, 249],
+    "danos_simples":         [840],
+    "lesiones_leves":        [13001],
 }
 
 ALL_PLACEBO_CUMS = [c for cums in PLACEBOS.values() for c in cums]
@@ -62,6 +68,7 @@ def extract_placebos(conn):
 
     # Compute region from comuna
     df["region"] = df["comuna_ocurrencia_codigo"].astype(int) // 1000
+    df["cum"] = df["cum"].astype(int)
 
     # Map CUM to placebo category
     cum_to_tipo = {}

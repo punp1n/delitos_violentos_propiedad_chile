@@ -40,6 +40,14 @@ def main():
     cch_pivot = cch_pivot.rename(columns=renames)
 
     print("Merging CCH with Population...")
+    
+    # Agregar C1 y C2 a la base final
+    c1_agg = cch[cch["C1_violento"] == 1.0].groupby(["region", "year", "month"])["n_denuncias"].sum().reset_index(name="n_violento_c1")
+    c2_agg = cch[cch["C2_violento"] == 1.0].groupby(["region", "year", "month"])["n_denuncias"].sum().reset_index(name="n_violento_c2")
+    
+    cch_pivot = cch_pivot.merge(c1_agg, on=["region", "year", "month"], how="left").fillna({"n_violento_c1": 0})
+    cch_pivot = cch_pivot.merge(c2_agg, on=["region", "year", "month"], how="left").fillna({"n_violento_c2": 0})
+
     panel = cch_pivot.merge(pop, on=["region", "year", "month"], how="left")
 
     print("Creating time variables and dummies...")
@@ -61,11 +69,18 @@ def main():
     # Dummy para estacionalidad mensual
     panel["month_of_year"] = panel["month"]
 
-    # Variable de macrozona (para modelo espacial complementario)
+    # Variable de macrozona — criterio geográfico (rev.2)
+    # Norte: Arica, Tarapacá, Antofagasta, Atacama, Coquimbo
+    # Centro: Valparaíso, O'Higgins, Maule
+    # Sur: Ñuble, Biobío, La Araucanía, Los Ríos
+    # Austral: Los Lagos, Aysén, Magallanes
+    # RM: Región Metropolitana (sin macrozona)
     macrozona_map = {
         15: "Norte", 1: "Norte", 2: "Norte", 3: "Norte", 4: "Norte",
-        5: "Centro", 13: "RM", 6: "Centro", 7: "Centro", 16: "Centro", 8: "Centro",
-        9: "Sur", 14: "Sur", 10: "Sur", 11: "Sur", 12: "Sur"
+        5: "Centro", 6: "Centro", 7: "Centro",
+        16: "Sur", 8: "Sur", 9: "Sur", 14: "Sur",
+        10: "Austral", 11: "Austral", 12: "Austral",
+        13: "RM",
     }
     panel["macrozona"] = panel["region"].map(macrozona_map)
     
