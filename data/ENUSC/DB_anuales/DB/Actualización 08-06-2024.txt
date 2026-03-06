@@ -1,0 +1,1 @@
+El presente archivo de datos de ENUSC 2023 contiene dos factores de expansión adicionales, denominados Fact_Pers_Reg_136 y Fact_Hog_Reg_136. Estos responden a una mejora en la calibración del factor de expansión y permite realizar comparaciones interanuales con ENUSC 2024.

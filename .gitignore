@@ -1,0 +1,11 @@
+*.csv
+*.parquet
+.env
+__pycache__/
+*.pyc
+.claude/
+02032026_proyecto.md
+04032026_proyecto_v2.0.md
+05032026_proyecto_v3.0.md
+05032026_proyecto_v3.1.md
+06032026_proyecto_v4.0.md
