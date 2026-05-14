@@ -1,13 +1,18 @@
 # 02_main_poisson_wcb.R — Modelo principal Poisson-QMLE con WCB
 # rev.2: Agrega diagnósticos VIF, test de sobredispersión, CRVE convencional
+# NOTA: El proyecto v4.0 especifica type="webb" para vcovBS(), pero
+#   sandwich::vcovBS() solo soporta "webb" para objetos lm, no glm.
+#   Para glm (Poisson-QMLE) las opciones son "xy", "fractional", "jackknife".
+#   Se usa "fractional" (fractionally re-weighted cluster bootstrap) ya que es
+#   la alternativa más cercana a WCB para modelos no lineales.
 
 library(dplyr)
 library(arrow)
 library(splines)
 library(sandwich)
 library(lmtest)
-library(car)       # para vif()
-library(AER)       # para dispersiontest()
+library(car) # para vif()
+library(AER) # para dispersiontest()
 
 for (d in c("C3", "C1", "C2")) {
   dir.create(paste0("paper1/output/tables/", d), showWarnings = FALSE, recursive = TRUE)
@@ -21,20 +26,20 @@ knots_main <- quantile(panel$trend_t, probs = c(0.25, 0.50, 0.75))
 
 run_wcb_model <- function(dv_name, panel_data, out_dir) {
   message(sprintf("Ajustando modelo para %s...", dv_name))
-  
+
   fmla <- as.formula(paste0(
     dv_name, " ~ factor(month_of_year) + d_estallido + d_pandemia + ",
     "ns(trend_t, knots = knots_main) + factor(region) + offset(log(pop_monthly))"
   ))
-  
+
   mod <- glm(fmla, family = poisson, data = panel_data)
-  
+
   # ───────────────────────────────────────────────────
   # Diagnóstico 1: Test de sobredispersión (Cameron-Trivedi)
   # ───────────────────────────────────────────────────
   disp_ratio <- deviance(mod) / df.residual(mod)
   disp_test <- tryCatch(dispersiontest(mod, trafo = 1), error = function(e) NULL)
-  
+
   sink(paste0(out_dir, "/diagnostico_sobredispersion_", dv_name, ".txt"))
   cat(sprintf("=== Diagnóstico de sobredispersión para %s ===\n\n", dv_name))
   cat(sprintf("Deviance / df.residual = %.4f\n", disp_ratio))
@@ -44,22 +49,25 @@ run_wcb_model <- function(dv_name, panel_data, out_dir) {
     print(disp_test)
   }
   sink()
-  
+
   # ───────────────────────────────────────────────────
   # Diagnóstico 2: VIF (multicolinealidad spline × dummies)
   # ───────────────────────────────────────────────────
-  vif_res <- tryCatch({
-    # vif no acepta offset, re-fit sin offset para VIF
-    fmla_nooff <- as.formula(paste0(
-      dv_name, " ~ factor(month_of_year) + d_estallido + d_pandemia + ",
-      "ns(trend_t, knots = knots_main) + factor(region)"
-    ))
-    mod_nooff <- glm(fmla_nooff, family = poisson, data = panel_data)
-    vif(mod_nooff)
-  }, error = function(e) NULL)
-  
+  vif_res <- tryCatch(
+    {
+      # vif no acepta offset, re-fit sin offset para VIF
+      fmla_nooff <- as.formula(paste0(
+        dv_name, " ~ factor(month_of_year) + d_estallido + d_pandemia + ",
+        "ns(trend_t, knots = knots_main) + factor(region)"
+      ))
+      mod_nooff <- glm(fmla_nooff, family = poisson, data = panel_data)
+      vif(mod_nooff)
+    },
+    error = function(e) NULL
+  )
+
   if (!is.null(vif_res)) {
-    # car::vif() returns GVIF matrix for factor variables 
+    # car::vif() returns GVIF matrix for factor variables
     if (is.matrix(vif_res)) {
       vif_df <- data.frame(
         Variable = rownames(vif_res),
@@ -83,24 +91,26 @@ run_wcb_model <- function(dv_name, panel_data, out_dir) {
       message(paste("   ", high_vif$Variable, "=", round(high_vif$GVIF_adj, 2), collapse = "\n"))
     }
   }
-  
+
   # ───────────────────────────────────────────────────
   # Inferencia: WCB (principal) + CRVE convencional (comparación)
   # ───────────────────────────────────────────────────
   message(sprintf("Calculando Wild Cluster Bootstrap (R=9999) para %s...", dv_name))
   vcov_wcb <- vcovBS(mod, cluster = ~region, R = 9999, type = "fractional")
   res_wcb <- coeftest(mod, vcov = vcov_wcb)
-  
+
   message(sprintf("Calculando CRVE convencional para %s...", dv_name))
   vcov_crve <- vcovCL(mod, cluster = ~region)
   res_crve <- coeftest(mod, vcov = vcov_crve)
-  
-  terms_to_keep <- c("d_estallido", "d_pandemia", 
-                     "ns(trend_t, knots = knots_main)1", 
-                     "ns(trend_t, knots = knots_main)2", 
-                     "ns(trend_t, knots = knots_main)3", 
-                     "ns(trend_t, knots = knots_main)4")
-  
+
+  terms_to_keep <- c(
+    "d_estallido", "d_pandemia",
+    "ns(trend_t, knots = knots_main)1",
+    "ns(trend_t, knots = knots_main)2",
+    "ns(trend_t, knots = knots_main)3",
+    "ns(trend_t, knots = knots_main)4"
+  )
+
   res_df <- data.frame(
     Categoria = dv_name,
     Termino = rownames(res_wcb),
@@ -110,7 +120,7 @@ run_wcb_model <- function(dv_name, panel_data, out_dir) {
     Std_Error_CRVE = res_crve[, "Std. Error"],
     p_value_CRVE = res_crve[, "Pr(>|z|)"]
   ) %>% filter(Termino %in% terms_to_keep)
-  
+
   res_df <- res_df %>%
     mutate(
       IRR = exp(Estimate),
@@ -119,16 +129,16 @@ run_wcb_model <- function(dv_name, panel_data, out_dir) {
       CI_lower_CRVE = exp(Estimate - 1.96 * Std_Error_CRVE),
       CI_upper_CRVE = exp(Estimate + 1.96 * Std_Error_CRVE)
     )
-  
+
   return(res_df)
 }
 
 set.seed(2026)
 
 # --- Clasificación C3 (Especificación Principal) ---
-res_vd <- run_wcb_model("n_violencia_dura", panel, "paper1/output/tables/C3")
-res_sorpresa <- run_wcb_model("n_sorpresa", panel, "paper1/output/tables/C3")
-res_nv <- run_wcb_model("n_no_violento", panel, "paper1/output/tables/C3")
+res_vd <- run_wcb_model("n_robos_violentos", panel, "paper1/output/tables/C3")
+res_sorpresa <- run_wcb_model("n_robos_sorpresa", panel, "paper1/output/tables/C3")
+res_nv <- run_wcb_model("n_robos_no_violentos", panel, "paper1/output/tables/C3")
 tabla_2_c3 <- bind_rows(res_vd, res_sorpresa, res_nv)
 write.csv(tabla_2_c3, "paper1/output/tables/C3/tabla_2_poisson_wcb.csv", row.names = FALSE)
 message("Resultados C3 guardados.")

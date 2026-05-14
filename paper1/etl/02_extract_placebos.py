@@ -16,6 +16,7 @@ import pyodbc
 from dotenv import load_dotenv
 import os
 from pathlib import Path
+import urllib
 
 
 # CUM codes for placebos
@@ -33,24 +34,30 @@ ALL_PLACEBO_CUMS = [c for cums in PLACEBOS.values() for c in cums]
 
 def get_connection():
     load_dotenv("data/SyJ/.env")
-    conn_str = (
-        f"DRIVER={{{os.getenv('SQLSERVER_DRIVER', 'ODBC Driver 18 for SQL Server')}}};"
-        f"SERVER={os.getenv('SQLSERVER_HOST')}\\{os.getenv('SQLSERVER_INSTANCE')};"
-        f"DATABASE={os.getenv('SQLSERVER_DATABASE')};"
-        f"UID={os.getenv('SQLSERVER_USER')};"
-        f"PWD={os.getenv('SQLSERVER_PASSWORD')};"
-        "TrustServerCertificate=yes;"
+    SERVER = os.getenv('SQLSERVER_HOST') + '\\' + os.getenv('SQLSERVER_INSTANCE')
+    DATABASE = os.getenv('SQLSERVER_DATABASE')
+    USERNAME = os.getenv('SQLSERVER_USER')
+    PASSWORD = os.getenv('SQLSERVER_PASSWORD')
+
+    params = urllib.parse.quote_plus(
+        rf"DRIVER={{ODBC Driver 17 for SQL Server}};"
+        rf"SERVER={SERVER};"
+        rf"DATABASE={DATABASE};"
+        rf"UID={USERNAME};"
+        rf"PWD={PASSWORD}"
     )
     try:
-        return pyodbc.connect(conn_str)
+        return pyodbc.connect(f"DRIVER={{ODBC Driver 18 for SQL Server}};SERVER={SERVER};DATABASE={DATABASE};UID={USERNAME};PWD={PASSWORD};TrustServerCertificate=yes;")
     except pyodbc.Error:
         print("Trying ODBC Driver 17...")
-        return pyodbc.connect(conn_str.replace("18", "17"))
+        return pyodbc.connect(f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SERVER};DATABASE={DATABASE};UID={USERNAME};PWD={PASSWORD};TrustServerCertificate=yes;")
 
 
 def extract_placebos(conn):
     """Extrae denuncias de delitos placebo agrupadas por región×mes."""
     cums_str = ",".join(str(c) for c in ALL_PLACEBO_CUMS)
+    # Retrieve database name from connection string to use in query
+    db_name = conn.getinfo(pyodbc.SQL_DATABASE_NAME)
     query = f"""
         SELECT
             comuna_ocurrencia_codigo,
@@ -58,8 +65,8 @@ def extract_placebos(conn):
             id_mes AS month,
             codigo_delito_carabineros AS cum,
             COUNT(*) AS n_denuncias
-        FROM cch.denuncias
-        WHERE year >= 2014 AND year <= 2024
+        FROM {db_name}.[cch].[denuncias]
+        WHERE year >= 2013 AND year <= 2025
           AND codigo_delito_carabineros IN ({cums_str})
         GROUP BY comuna_ocurrencia_codigo, year, id_mes, codigo_delito_carabineros
     """

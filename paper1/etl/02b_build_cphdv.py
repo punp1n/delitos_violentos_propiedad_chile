@@ -37,12 +37,12 @@ REGION_MAP = {
 
 
 def main():
-    input_path = Path("data/CPHDV/Base-VHC_2018_PS2025.xlsx")
+    input_path = Path("data/CPHDV/Base_de_Datos_VHC_2018_2025.xlsx")
     output_path = Path("paper1/output/data/cphdv_homicidios.parquet")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     print(f"Reading CPHDV data from {input_path}...")
-    df = pd.read_excel(input_path)
+    df = pd.read_excel(input_path, sheet_name="Base de Datos")
     print(f"  Raw shape: {df.shape}")
 
     # Map region names to numeric codes
@@ -63,9 +63,9 @@ def main():
     df["year"] = df["ID_ANO"].astype(int)
     df["month"] = df["MES2"].astype(int)
 
-    # Filter to 2018-2024 (exclude 2025 partial)
-    df = df[df["year"].between(2018, 2024)]
-    print(f"  After filtering 2018-2024: {len(df)} homicides")
+    # Filter to 2018-2025 (full series)
+    df = df[df["year"].between(2018, 2025)]
+    print(f"  After filtering 2018-2025: {len(df)} homicides")
 
     # Aggregate to region × year × month
     agg = (

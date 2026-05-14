@@ -9,3 +9,33 @@ __pycache__/
 05032026_proyecto_v3.0.md
 05032026_proyecto_v3.1.md
 06032026_proyecto_v4.0.md
+
+# LaTeX artifacts
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.bak
+texput.log
+*_tmp.aux
+*_tmp.bbl
+*_tmp.blg
+*_tmp.log
+*_tmp.out
+*_tmp.pdf
+
+# Scripts temporales de verificación/exploración
+check_*.py
+check_*.R
+tmp_*.py
+tmp_*.R
+debug*.py
+diagnostico*.py
+
+# Directorios de traducción temporal
+temp_translation*/
+
+# Outputs de R generados automáticamente
+Rplots*.pdf

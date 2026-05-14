@@ -13,45 +13,14 @@ from dotenv import load_dotenv
 import os
 import argparse
 from pathlib import Path
-
-
-# ──────────────────────────────────────────────
-# Clasificaciones de delitos contra la propiedad
-# ──────────────────────────────────────────────
-
-# CUM que conforman "Violento" en la clasificación institucional (SPD/CAPJ)
-VIOLENTO_C1 = {802, 803, 804, 827, 828, 829, 861, 862, 867}
-
-# CUM que conforman "No Violento" en C1 (incluye receptación)
-NO_VIOLENTO_C1 = {
-    808, 809, 810,                          # Robos en lugar
-    812, 864, 869, 2009, 12053,             # Receptación
-    821, 826, 846, 847, 848, 853, 13028,    # Hurtos
-    831, 868,                               # Robo de vehículo s/v
-    858,                                    # Cajeros automáticos
-    870, 871,                               # Robos/hurtos en calamidad
-    872,                                    # Saqueo
-    891, 892,                               # Sustracción de madera
-}
-
-# CUM de receptación (excluidos en C2 y C3)
-RECEPTACION = {812, 864, 869, 2009, 12053}
-
-# CUM de "Violencia Dura" en C3 (subconjunto de VIOLENTO_C1)
-VIOLENCIA_DURA_C3 = {802, 803, 827, 828, 829, 861, 862, 867}
-
-# CUM de "Sorpresa" en C3
-SORPRESA_C3 = {804}
-
-# Universo completo de CUM del estudio
-ALL_TARGET_CUMS = VIOLENTO_C1 | NO_VIOLENTO_C1
+from cum_classification import ALL_PROPERTY_CUMS, add_classifications
 
 
 def get_connection():
     """Establece conexión SQL Server usando credenciales .env."""
     load_dotenv("data/SyJ/.env")
     conn_str = (
-        f"DRIVER={{{os.getenv('SQLSERVER_DRIVER', 'ODBC Driver 18 for SQL Server')}}};"
+        f"DRIVER={{{os.getenv('SQLSERVER_DRIVER', 'ODBC Driver 17 for SQL Server')}}};"
         f"SERVER={os.getenv('SQLSERVER_HOST')}\\{os.getenv('SQLSERVER_INSTANCE')};"
         f"DATABASE={os.getenv('SQLSERVER_DATABASE')};"
         f"UID={os.getenv('SQLSERVER_USER')};"
@@ -72,12 +41,12 @@ def extract_police_data(conn):
             comuna_ocurrencia_codigo,
             year,
             id_mes             AS month,
-            codigo_delito_carabineros AS cum,
+            codigo_materia     AS cum,
             '{tipo}'           AS tipo_caso,
             COUNT(*)           AS cant
         FROM cch.{tabla}
-        WHERE year >= 2014 AND year <= 2024
-        GROUP BY comuna_ocurrencia_codigo, year, id_mes, codigo_delito_carabineros
+        WHERE year >= 2013 AND year <= 2025
+        GROUP BY comuna_ocurrencia_codigo, year, id_mes, codigo_materia
     """
     print("  Extracting denuncias...")
     df_den = pd.read_sql(query.format(tipo="denuncia", tabla="denuncias"), conn)
@@ -94,40 +63,6 @@ def extract_cum_catalog(conn):
         FROM cum.cnp_periodo
         WHERE periodo_id = (SELECT MAX(periodo_id) FROM cum.cnp_periodo)
     """, conn)
-
-
-def calculate_classifications(df):
-    """
-    Añade tres clasificaciones como columnas:
-      C1_violento  — dummy binaria institucional SPD/CAPJ (incluye receptación)
-      C2_violento  — dummy binaria ajustada (excluye receptación)
-      C3_categoria — tricotómica: 'Violencia Dura' / 'Sorpresa' / 'No Violento'
-    """
-    # C1: Institucional SPD/CAPJ
-    df["C1_violento"] = df["cum"].map(
-        lambda c: 1 if c in VIOLENTO_C1
-        else (0 if c in NO_VIOLENTO_C1 else None)
-    )
-
-    # C2: Ajustada (excluye receptación → NaN)
-    df["C2_violento"] = df["cum"].map(
-        lambda c: None if c in RECEPTACION
-        else (1 if c in VIOLENTO_C1
-              else (0 if c in NO_VIOLENTO_C1 else None))
-    )
-
-    # C3: Tricotómica (excluye receptación → NaN)
-    def _map_c3(cum):
-        if cum in VIOLENCIA_DURA_C3:
-            return "Violencia Dura"
-        if cum in SORPRESA_C3:
-            return "Sorpresa"
-        if cum in (NO_VIOLENTO_C1 - RECEPTACION):
-            return "No Violento"
-        return None
-
-    df["C3_categoria"] = df["cum"].apply(_map_c3)
-    return df
 
 
 def process_data(df_combined, df_cum):
@@ -160,16 +95,16 @@ def process_data(df_combined, df_cum):
     df_cum["cum"] = df_cum["cum"].fillna(0).astype(int)
     df_final = df_pivot.merge(df_cum, on="cum", how="left")
 
-    # Aplicar clasificaciones
-    df_final = calculate_classifications(df_final)
+    # Aplicar clasificaciones canonicas
+    df_final = add_classifications(df_final)
 
     # Filtrar al universo de delitos contra la propiedad
-    df_final = df_final[df_final["cum"].isin(ALL_TARGET_CUMS)].copy()
+    df_final = df_final[df_final["cum"].isin(ALL_PROPERTY_CUMS)].copy()
 
     # Reordenar columnas
     cols = [
         "comuna", "region", "year", "month", "cum", "glosa_cum", "glosa_ine",
-        "C1_violento", "C2_violento", "C3_categoria",
+        "C1_violento", "C2_violento", "C3_categoria", "c3_modelable", "excluded_reason",
         "n_denuncias", "n_detenciones",
     ]
     df_final = df_final[[c for c in cols if c in df_final.columns]]

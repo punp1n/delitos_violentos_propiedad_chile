@@ -8,17 +8,22 @@ library(splines)
 library(sandwich)
 library(lmtest)
 library(tidyr)
+library(ggplot2)
+library(lubridate)
 
 dir.create("paper1/output/tables", showWarnings = FALSE, recursive = TRUE)
 
 message("Cargando datos principales y placebos...")
 panel <- read_parquet("paper1/output/data/panel_region_month.parquet")
 placebos <- read_parquet("paper1/output/data/placebo_panel.parquet")
+pop_nacional <- read.csv("paper1/output/data/poblacion_nacional_mensual_base2024.csv")
 
 # Merge con el panel para heredar pop_monthly, d_estallido, etc.
 panel_placebo <- panel %>%
-  select(region, year, month, yyyymm, pop_monthly, d_estallido, d_pandemia,
-         month_of_year, trend_t, macrozona) %>%
+  select(
+    region, year, month, yyyymm, pop_monthly, d_estallido, d_pandemia,
+    month_of_year, trend_t, macrozona
+  ) %>%
   left_join(placebos, by = c("region", "year", "month"))
 
 knots_main <- quantile(panel$trend_t, probs = c(0.25, 0.50, 0.75))
@@ -26,11 +31,13 @@ knots_main <- quantile(panel$trend_t, probs = c(0.25, 0.50, 0.75))
 # ═══════════════════════════════════════════════════════════════
 #  Helper para extraer resultados
 # ═══════════════════════════════════════════════════════════════
-terms_to_keep <- c("d_estallido", "d_pandemia",
-                   "ns(trend_t, knots = knots_main)1",
-                   "ns(trend_t, knots = knots_main)2",
-                   "ns(trend_t, knots = knots_main)3",
-                   "ns(trend_t, knots = knots_main)4")
+terms_to_keep <- c(
+  "d_estallido", "d_pandemia",
+  "ns(trend_t, knots = knots_main)1",
+  "ns(trend_t, knots = knots_main)2",
+  "ns(trend_t, knots = knots_main)3",
+  "ns(trend_t, knots = knots_main)4"
+)
 
 extract_res <- function(res, name) {
   df <- data.frame(
@@ -39,7 +46,8 @@ extract_res <- function(res, name) {
     Estimate = res[, "Estimate"],
     Std_Error = res[, "Std. Error"],
     p_value = res[, "Pr(>|z|)"]
-  ) %>% filter(Termino %in% terms_to_keep) %>%
+  ) %>%
+    filter(Termino %in% terms_to_keep) %>%
     mutate(
       IRR = exp(Estimate),
       CI_lower = exp(Estimate - 1.96 * Std_Error),
@@ -58,8 +66,8 @@ panel_p1 <- panel_placebo %>%
 
 mod_p1 <- glm(
   n_denuncias ~ factor(month_of_year) + d_estallido + d_pandemia +
-               ns(trend_t, knots = knots_main) + factor(region) +
-               offset(log(pop_monthly)),
+    ns(trend_t, knots = knots_main) + factor(region) +
+    offset(log(pop_monthly)),
   family = poisson, data = panel_p1
 )
 message("  Calculando WCB (R=9999)...")
@@ -75,17 +83,21 @@ panel_p2 <- panel_placebo %>%
   group_by(yyyymm, year, month, trend_t, month_of_year, d_estallido, d_pandemia) %>%
   summarise(
     n_homicidios = sum(n_denuncias, na.rm = TRUE),
-    pop_monthly_nacional = sum(pop_monthly),
     .groups = "drop"
-  )
+  ) %>%
+  left_join(pop_nacional, by = c("year", "month")) %>%
+  rename(pop_monthly_nacional = pop_nacional_base2024)
 
 mod_p2 <- glm(
   n_homicidios ~ factor(month_of_year) + d_estallido + d_pandemia +
-                 ns(trend_t, knots = knots_main) +
-                 offset(log(pop_monthly_nacional)),
+    ns(trend_t, knots = knots_main) +
+    offset(log(pop_monthly_nacional)),
   family = poisson, data = panel_p2
 )
-vcov_hac_p2 <- vcovHAC(mod_p2)
+vcov_hac_p2 <- tryCatch(vcovHAC(mod_p2), error = function(e) {
+  message("  vcovHAC falló para P2, usando vcovHC: ", e$message)
+  vcovHC(mod_p2, type = "HC1")
+})
 res_p2 <- coeftest(mod_p2, vcov = vcov_hac_p2)
 
 # ═══════════════════════════════════════════════════════════════
@@ -105,14 +117,20 @@ panel_p2_reg <- panel_placebo %>%
 res_p2_reg_list <- list()
 for (mz in unique(panel_p2_reg$macrozona)) {
   data_mz <- panel_p2_reg %>% filter(macrozona == mz)
-  mod_mz <- tryCatch({
-    glm(n_homicidios ~ factor(month_of_year) + d_estallido + d_pandemia +
+  mod_mz <- tryCatch(
+    {
+      glm(
+        n_homicidios ~ factor(month_of_year) + d_estallido + d_pandemia +
           ns(trend_t, knots = knots_main) + offset(log(pop_monthly)),
-        family = poisson, data = data_mz)
-  }, error = function(e) NULL)
+        family = poisson, data = data_mz
+      )
+    },
+    error = function(e) NULL
+  )
 
   if (!is.null(mod_mz)) {
-    res_mz <- coeftest(mod_mz, vcov = vcovHAC(mod_mz))
+    vcov_mz <- tryCatch(vcovHAC(mod_mz), error = function(e) vcovHC(mod_mz, type = "HC1"))
+    res_mz <- coeftest(mod_mz, vcov = vcov_mz)
     res_p2_reg_list[[mz]] <- extract_res(res_mz, paste0("P2_Homicidios_", mz))
   }
 }
@@ -127,35 +145,42 @@ tabla_p2b <- NULL
 
 if (cphdv_exists) {
   cphdv <- read_parquet("paper1/output/data/cphdv_homicidios.parquet")
-  
+
   # Nacional (region == 0)
   cphdv_nacional <- cphdv %>%
     filter(region == 0) %>%
     select(year, month, n_homicidios_cphdv)
-  
+
   # Merge con panel temporal (solo 2018-2024)
   panel_cphdv <- panel %>%
     filter(year >= 2018) %>%
     group_by(yyyymm, year, month, trend_t, month_of_year, d_estallido, d_pandemia) %>%
-    summarise(pop_monthly_nacional = sum(pop_monthly), .groups = "drop") %>%
+    summarise(.groups = "drop") %>%
+    left_join(pop_nacional, by = c("year", "month")) %>%
+    rename(pop_monthly_nacional = pop_nacional_base2024) %>%
     left_join(cphdv_nacional, by = c("year", "month")) %>%
     mutate(n_homicidios_cphdv = replace_na(n_homicidios_cphdv, 0))
-  
+
   # Recalcular knots para el rango 2018-2024
   knots_cphdv <- quantile(panel_cphdv$trend_t, probs = c(0.25, 0.50, 0.75))
-  
+
   mod_cphdv <- glm(
     n_homicidios_cphdv ~ factor(month_of_year) + d_estallido + d_pandemia +
-                         ns(trend_t, knots = knots_cphdv) +
-                         offset(log(pop_monthly_nacional)),
+      ns(trend_t, knots = knots_cphdv) +
+      offset(log(pop_monthly_nacional)),
     family = poisson, data = panel_cphdv
   )
-  vcov_hac_cphdv <- vcovHAC(mod_cphdv)
+  vcov_hac_cphdv <- tryCatch(vcovHAC(mod_cphdv), error = function(e) {
+    message("  vcovHAC falló para CPHDV, usando vcovHC")
+    vcovHC(mod_cphdv, type = "HC1")
+  })
   res_cphdv <- coeftest(mod_cphdv, vcov = vcov_hac_cphdv)
-  
-  cphdv_terms <- c("d_estallido", "d_pandemia",
-                   grep("trend_t", rownames(res_cphdv), value = TRUE))
-  
+
+  cphdv_terms <- c(
+    "d_estallido", "d_pandemia",
+    grep("trend_t", rownames(res_cphdv), value = TRUE)
+  )
+
   tabla_p2b <- data.frame(
     Categoria = "P2b_CPHDV_Confirmados",
     Termino = rownames(res_cphdv),
@@ -169,7 +194,7 @@ if (cphdv_exists) {
       CI_lower = exp(Estimate - 1.96 * Std_Error),
       CI_upper = exp(Estimate + 1.96 * Std_Error)
     )
-  
+
   # Comparación CCH vs CPHDV (tabla anual)
   homicidios_comp <- panel_p2 %>%
     group_by(year) %>%
@@ -198,17 +223,21 @@ panel_p3 <- panel_placebo %>%
   group_by(yyyymm, year, month, trend_t, month_of_year, d_estallido, d_pandemia) %>%
   summarise(
     n_secuestros = sum(n_denuncias, na.rm = TRUE),
-    pop_monthly_nacional = sum(pop_monthly),
     .groups = "drop"
-  )
+  ) %>%
+  left_join(pop_nacional, by = c("year", "month")) %>%
+  rename(pop_monthly_nacional = pop_nacional_base2024)
 
 mod_p3 <- glm(
   n_secuestros ~ factor(month_of_year) + d_estallido + d_pandemia +
-                 ns(trend_t, knots = knots_main) +
-                 offset(log(pop_monthly_nacional)),
+    ns(trend_t, knots = knots_main) +
+    offset(log(pop_monthly_nacional)),
   family = poisson, data = panel_p3
 )
-vcov_hac_p3 <- vcovHAC(mod_p3)
+vcov_hac_p3 <- tryCatch(vcovHAC(mod_p3), error = function(e) {
+  message("  vcovHAC falló para P3, usando vcovHC: ", e$message)
+  vcovHC(mod_p3, type = "HC1")
+})
 res_p3 <- coeftest(mod_p3, vcov = vcov_hac_p3)
 
 # ═══════════════════════════════════════════════════════════════
@@ -221,8 +250,8 @@ panel_p4 <- panel_placebo %>%
 
 mod_p4 <- glm(
   n_denuncias ~ factor(month_of_year) + d_estallido + d_pandemia +
-               ns(trend_t, knots = knots_main) + factor(region) +
-               offset(log(pop_monthly)),
+    ns(trend_t, knots = knots_main) + factor(region) +
+    offset(log(pop_monthly)),
   family = poisson, data = panel_p4
 )
 message("  Calculando WCB (R=9999)...")
@@ -239,8 +268,8 @@ panel_p5 <- panel_placebo %>%
 
 mod_p5 <- glm(
   n_denuncias ~ factor(month_of_year) + d_estallido + d_pandemia +
-               ns(trend_t, knots = knots_main) + factor(region) +
-               offset(log(pop_monthly)),
+    ns(trend_t, knots = knots_main) + factor(region) +
+    offset(log(pop_monthly)),
   family = poisson, data = panel_p5
 )
 message("  Calculando WCB (R=9999)...")
@@ -269,3 +298,55 @@ if (!is.null(tabla_p2b)) {
 }
 
 message("Resultados guardados en tabla_8_placebos.csv, tabla_8b, tabla_8c")
+
+# ═══════════════════════════════════════════════════════════════
+#  Generar Figura 5: Series temporales de Placebos (P1 y P2)
+# ═══════════════════════════════════════════════════════════════
+message("\n=== Generando Figura 5: Panel de Placebos ===")
+
+p1_nac <- panel_placebo %>%
+  filter(tipo_placebo == "cuasidelito_vehicular") %>%
+  group_by(date = make_date(year, month, 1)) %>%
+  summarise(Denuncias = sum(n_denuncias, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Categoria = "Cuasidelitos Vehiculares\n(Proxy Movilidad)")
+
+p2_nac <- panel_placebo %>%
+  filter(tipo_placebo == "homicidio_doloso") %>%
+  group_by(date = make_date(year, month, 1)) %>%
+  summarise(Denuncias = sum(n_denuncias, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Categoria = "Homicidios Dolosos\n(Violencia Real)")
+
+nacional_placebos <- bind_rows(p1_nac, p2_nac)
+
+rect_data <- data.frame(
+  xmin = as.Date(c("2019-10-01", "2020-03-01")),
+  xmax = as.Date(c("2020-02-28", "2021-12-31")),
+  ymin = -Inf, ymax = Inf,
+  Periodo = factor(c("Estallido Social", "Pandemia"), levels = c("Estallido Social", "Pandemia"))
+)
+
+fig_5 <- ggplot(nacional_placebos, aes(x = date, y = Denuncias)) +
+  geom_rect(data = rect_data, aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax, fill = Periodo), inherit.aes = FALSE, alpha = 0.5) +
+  geom_line(color = "#31a354", linewidth = 0.8) +
+  geom_smooth(method = "loess", span = 0.3, color = "#006d2c", fill = "#e5f5e0", alpha = 0.5) +
+  scale_fill_manual(name = "Contexto", values = c("Estallido Social" = "#cccccc", "Pandemia" = "#e6e6e6")) +
+  facet_wrap(~Categoria, scales = "free_y") +
+  theme_minimal(base_family = "sans", base_size = 12) +
+  labs(
+    title = NULL,
+    subtitle = NULL,
+    x = NULL, y = "Frecuencia Absoluta Mensual"
+  ) +
+  theme(
+    strip.background = element_rect(fill = "#f2f0f7", color = NA),
+    strip.text = element_text(face = "bold", size = 11, color = "#252525"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "#e5e5e5", fill = NA, linewidth = 0.5),
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    legend.position = "bottom"
+  )
+
+ggsave("paper1/output/figures/fig5_placebos.png", fig_5, width = 11, height = 5.5, dpi = 300)
+ggsave("paper1/output/figures/fig5_placebos.pdf", fig_5, width = 11, height = 5.5)
+message("Figura 5 guardada exitosamente.")

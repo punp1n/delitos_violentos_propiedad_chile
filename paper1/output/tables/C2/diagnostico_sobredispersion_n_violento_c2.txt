@@ -1,6 +1,6 @@
 === Diagnóstico de sobredispersión para n_violento_c2 ===
 
-Deviance / df.residual = 8.2347
+Deviance / df.residual = 8.0427
   (>1 indica sobredispersión; Poisson QMLE es robusto si E[Y|X] correcta)
 
 Test de Cameron-Trivedi (H0: equidispersión):
@@ -8,9 +8,9 @@ Test de Cameron-Trivedi (H0: equidispersión):
 	Overdispersion test
 
 data:  mod
-z = 11.72, p-value < 2.2e-16
+z = 5.6958, p-value = 6.141e-09
 alternative hypothesis: true alpha is greater than 0
 sample estimates:
    alpha 
-7.185865 
+7.354542 
 

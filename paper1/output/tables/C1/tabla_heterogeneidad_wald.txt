@@ -2,4 +2,4 @@ Wald test:
 ----------
 
 Chi-squared test:
-X2 = 3674.7, df = 12, P(> X2) = 0.0
+X2 = 4.4e+07, df = 16, P(> X2) = 0.0

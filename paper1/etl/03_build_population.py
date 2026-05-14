@@ -2,13 +2,20 @@
 03_build_population.py — ETL: Denominador poblacional
 Proyecto v4.0
 
-Lee proyecciones INE (comuna → región), aplica corrección SERMIG,
-e interpola linealmente a nivel mensual.
+Lee proyecciones INE (comuna → región), aplica corrección SERMIG
+(importada de 04_build_sermig.py), e interpola linealmente a nivel mensual.
 """
 
 import pandas as pd
 import numpy as np
+import sys
 from pathlib import Path
+
+# Agregar directorio actual al path para permitir importar 04_build_sermig
+sys.path.insert(0, str(Path(__file__).parent))
+from importlib import import_module
+_sermig_mod = import_module("04_build_sermig")
+build_sermig_correction = _sermig_mod.build_sermig_correction
 
 
 def build_ine_population():
@@ -28,75 +35,11 @@ def build_ine_population():
     )
     pop_long["year"] = pop_long["year_col"].str.extract(r"(\d+)").astype(int)
     pop_long = (
-        pop_long[pop_long["year"].between(2014, 2025)]
+        pop_long[pop_long["year"].between(2013, 2025)]
         [["Region", "year", "pop_ine"]]
         .rename(columns={"Region": "region"})
     )
     return pop_long
-
-
-def build_sermig_correction():
-    """Lee SERMIG (RD + RT otorgadas), acumula desde 2018."""
-    print("  Reading SERMIG data...")
-
-    region_map = {
-        "Arica y Parinacota": 15, "Tarapacá": 1, "Antofagasta": 2,
-        "Atacama": 3, "Coquimbo": 4, "Valparaíso": 5,
-        "Metropolitana de Santiago": 13, "O'Higgins": 6,
-        "Maule": 7, "Ñuble": 16, "Biobío": 8,
-        "La Araucanía": 9, "Los Ríos": 14, "Los Lagos": 10,
-        "Aysén del Gral. Carlos Ibáñez del Campo": 11,
-        "Magallanes y de la Antártica Chilena": 12,
-    }
-
-    frames = []
-    for archivo, tipo in [
-        ("data/SERMIG/Residencias_definitivas/RD-Resueltas-2o-semestre-2025.xlsx", "RD"),
-        ("data/SERMIG/Residencias_temporales/RT-Resueltas-2o-semestre-2025.xlsx", "RT"),
-    ]:
-        try:
-            df = pd.read_excel(archivo)
-            # Filtrar solo otorgadas
-            df = df[df["TIPO_RESUELTO"].str.strip().str.lower() == "otorga"].copy()
-            # Mapear regiones
-            df["region"] = df["REGIÓN"].map(region_map)
-            df = df[df["region"].notna()].copy()
-            df["region"] = df["region"].astype(int)
-            df = df.rename(columns={"AÑO": "year"})
-            # Agregar
-            agg = df.groupby(["region", "year"]).agg(otorga=(df.columns[-2], "size")).reset_index()
-            # Usar Total si existe
-            if "Total" in df.columns:
-                df["Total"] = pd.to_numeric(df["Total"], errors="coerce").fillna(0)
-                agg = df.groupby(["region", "year"])["Total"].sum().reset_index()
-                agg = agg.rename(columns={"Total": "otorga"})
-            agg["tipo_residencia"] = tipo
-            frames.append(agg)
-        except Exception as e:
-            print(f"  Warning reading {archivo}: {e}")
-
-    if not frames:
-        print("  No SERMIG data found. Returning empty correction.")
-        return pd.DataFrame(columns=["region", "year", "sermig_cumul"])
-
-    sermig = pd.concat(frames)
-    sermig_agg = sermig.groupby(["region", "year"])["otorga"].sum().reset_index()
-    sermig_agg = sermig_agg.rename(columns={"otorga": "sermig_annual"})
-
-    # Acumular desde 2018
-    all_regions = sermig_agg["region"].unique()
-    all_years = range(2014, 2026)
-    idx = pd.MultiIndex.from_product([all_regions, all_years], names=["region", "year"])
-    sermig_full = sermig_agg.set_index(["region", "year"]).reindex(idx, fill_value=0).reset_index()
-    sermig_full["sermig_annual"] = pd.to_numeric(sermig_full["sermig_annual"], errors="coerce").fillna(0)
-    sermig_full.loc[sermig_full["year"] < 2018, "sermig_annual"] = 0
-    sermig_full["sermig_cumul"] = (
-        sermig_full.sort_values("year")
-        .groupby("region")["sermig_annual"]
-        .cumsum()
-    )
-
-    return sermig_full[["region", "year", "sermig_cumul"]]
 
 
 def interpolate_monthly(pop_annual):
@@ -147,12 +90,12 @@ def main():
     pop["sermig_cumul"] = pop["sermig_cumul"].fillna(0)
     pop["pop_corrected"] = pop["pop_ine"] + pop["sermig_cumul"]
 
-    # Filtrar a 2014-2024
-    pop = pop[pop["year"].between(2014, 2024)]
+    # Filtrar a 2013-2025
+    pop = pop[pop["year"].between(2013, 2025)]
 
     # Interpolar mensualmente
     pop_monthly = interpolate_monthly(pop)
-    pop_monthly = pop_monthly[pop_monthly["year"].between(2014, 2024)]
+    pop_monthly = pop_monthly[pop_monthly["year"].between(2013, 2025)]
 
     print(f"\nDataframe shape: {pop_monthly.shape}")
     print(f"Regiones: {pop_monthly['region'].nunique()}")
